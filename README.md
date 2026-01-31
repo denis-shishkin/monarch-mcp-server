@@ -59,6 +59,64 @@ My MonarchMoney referral: https://www.monarchmoney.com/referral/ufmn0r83yf?r_sou
 
 4. **Restart Claude Desktop**
 
+### Claude Code (CLI) Setup
+
+If you're using **Claude Code** (the CLI tool), the configuration is different:
+
+1. **Global Configuration** (available across all projects):
+
+   Add this to `~/.claude.json`:
+
+   ```json
+   {
+     "mcpServers": {
+       "Monarch Money": {
+         "command": "/opt/homebrew/bin/uv",
+         "args": [
+           "run",
+           "--with",
+           "mcp[cli]",
+           "--with-editable",
+           "/path/to/your/monarch-mcp-server",
+           "mcp",
+           "run",
+           "/path/to/your/monarch-mcp-server/src/monarch_mcp_server/server.py"
+         ]
+       }
+     }
+   }
+   ```
+
+2. **Project-Level Configuration** (available only in specific directory):
+
+   Create `.mcp.json` in your project directory:
+
+   ```json
+   {
+     "Monarch Money": {
+       "command": "/opt/homebrew/bin/uv",
+       "args": [
+         "run",
+         "--with",
+         "mcp[cli]",
+         "--with-editable",
+         "/path/to/your/monarch-mcp-server",
+         "mcp",
+         "run",
+         "/path/to/your/monarch-mcp-server/src/monarch_mcp_server/server.py"
+       ]
+     }
+   }
+   ```
+
+   **Important**: Replace `/path/to/your/monarch-mcp-server` with your actual path!
+
+3. **Restart Claude Code**
+
+4. **Keychain Access** (macOS only)
+
+   The first time the MCP server accesses your saved session, macOS will prompt for Keychain access. Choose "Always Allow" to avoid repeated prompts.
+
 ### 2. One-Time Authentication Setup
 
 **Important**: For security and MFA support, authentication is done outside of Claude Desktop.
