@@ -135,6 +135,8 @@ My MonarchMoney referral: https://www.monarchmoney.com/referral/ufmn0r83yf?r_sou
 
 **Important**: For security and MFA support, authentication is done outside of Claude.
 
+#### Option A: Email/Password Login
+
 Open Terminal and run:
 
 **Using `python`**:
@@ -153,6 +155,17 @@ Follow the prompts:
 - Enter your Monarch Money email and password
 - Provide 2FA code if you have MFA enabled
 - Session will be saved automatically
+
+#### Option B: Google OAuth Login
+If you sign in to Monarch with Google:
+```bash
+cd /path/to/your/monarch-mcp-server
+python google_login.py
+```
+
+This opens a browser window where you can sign in with Google. The token is captured automatically.
+
+You can also trigger authentication from within Claude using the `authenticate_with_google` tool.
 
 ### 3. Start Using
 
@@ -211,6 +224,7 @@ Once authenticated, use these tools directly in Claude Desktop or Claude Code:
 ### 🔐 Secure Authentication
 - **One-Time Setup**: Authenticate once, use for weeks/months
 - **MFA Support**: Full support for two-factor authentication
+- **Google OAuth**: Sign in with Google account (no password needed)
 - **Session Persistence**: No need to re-authenticate frequently
 - **Secure**: Credentials never pass through Claude
 
@@ -219,6 +233,7 @@ Once authenticated, use these tools directly in Claude Desktop or Claude Code:
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `setup_authentication` | Get setup instructions | None |
+| `authenticate_with_google` | Open browser for Google OAuth login | None |
 | `check_auth_status` | Check authentication status | None |
 | `get_accounts` | Get all financial accounts | None |
 | `get_transactions` | Get transactions with filtering | `limit`, `offset`, `start_date`, `end_date`, `account_id` |
@@ -313,7 +328,7 @@ Create a rule to automatically categorize Amazon transactions as "Shopping" usin
 
 ### Authentication Issues
 If you see "Authentication needed" errors:
-1. Run the setup command: `cd /path/to/your/monarch-mcp-server && python login_setup.py` (or `uv run python login_setup.py`)
+1. Run the setup command: `cd /path/to/your/monarch-mcp-server && python login_setup.py` (or `uv run python login_setup.py`, or `python google_login.py` for Google OAuth)
 2. Restart Claude Desktop or Claude Code
 3. Try using a tool like `get_accounts`
 
@@ -336,7 +351,8 @@ monarch-mcp-server/
 ├── src/monarch_mcp_server/
 │   ├── __init__.py
 │   └── server.py          # Main server implementation
-├── login_setup.py         # Authentication setup script
+├── login_setup.py         # Email/password authentication script
+├── google_login.py        # Google OAuth authentication script
 ├── pyproject.toml         # Project configuration
 ├── requirements.txt       # Dependencies
 └── README.md             # This documentation
