@@ -28,6 +28,7 @@ async def get_accounts() -> str:
                 "is_active": account.get("isActive")
                 if "isActive" in account
                 else not account.get("deactivatedAt"),
+                "is_hidden": account.get("isHidden", False),
             }
             account_list.append(account_info)
 

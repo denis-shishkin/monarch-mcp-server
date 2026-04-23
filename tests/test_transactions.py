@@ -5,6 +5,10 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from monarch_mcp_server.tools.transactions import (
+    get_transactions,
+    create_transaction,
+    update_transaction,
+    categorize_transaction,
     get_transactions_needing_review,
     set_transaction_category,
     update_transaction_notes,
@@ -679,3 +683,463 @@ class TestGetRecurringTransactions:
         data = json.loads(result)
         assert data["error"] is True
         assert "API error" in data["message"]
+
+
+class TestGetTransactions:
+    async def test_returns_formatted_transactions(self):
+        result = json.loads(await get_transactions())
+        assert len(result) == 2
+        assert result[0]["id"] == "txn-1"
+        assert result[0]["amount"] == -42.50
+        assert result[0]["category"] == "Groceries"
+        assert result[0]["category_id"] == "cat-1"
+        assert result[0]["account_id"] == "acc-1"
+        assert result[0]["merchant"] == "Whole Foods"
+        assert result[0]["needs_review"] is True
+        assert result[0]["notes"] == "weekly groceries"
+        assert result[0]["is_recurring"] is False
+        assert result[0]["review_status"] == "needs_review"
+        assert result[0]["is_split_transaction"] is False
+        assert result[0]["hide_from_reports"] is False
+        assert result[0]["tags"] == [{"id": "tag-1", "name": "business"}]
+
+    async def test_handles_null_merchant(self):
+        result = json.loads(await get_transactions())
+        assert result[1]["merchant"] is None
+        assert result[1]["notes"] is None
+        assert result[1]["needs_review"] is False
+        assert result[1]["tags"] == []
+
+    async def test_handles_null_category(self, mock_monarch_client):
+        mock_monarch_client.get_transactions.return_value = {
+            "allTransactions": {
+                "results": [
+                    {
+                        "id": "txn-3",
+                        "date": "2026-03-03",
+                        "amount": -10.00,
+                        "description": "ATM",
+                        "category": None,
+                        "account": {"id": "acc-1", "displayName": "Checking"},
+                        "merchant": None,
+                        "isPending": True,
+                        "needsReview": False,
+                        "notes": None,
+                        "isRecurring": False,
+                        "reviewStatus": None,
+                        "isSplitTransaction": False,
+                        "hideFromReports": False,
+                        "tags": [],
+                    }
+                ]
+            }
+        }
+        result = json.loads(await get_transactions())
+        assert result[0]["category"] is None
+        assert result[0]["category_id"] is None
+        assert result[0]["is_pending"] is True
+
+    async def test_passes_filters_to_client(self, mock_monarch_client):
+        await get_transactions(
+            limit=10, offset=5, start_date="2026-03-01", account_id="acc-1"
+        )
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=10,
+            offset=5,
+            start_date="2026-03-01",
+            account_ids=["acc-1"],
+        )
+
+    async def test_account_id_backward_compat(self, mock_monarch_client):
+        await get_transactions(account_id="acc-1")
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, account_ids=["acc-1"]
+        )
+
+    async def test_account_id_merged_with_account_ids(self, mock_monarch_client):
+        await get_transactions(account_id="acc-1", account_ids=["acc-2"])
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, account_ids=["acc-2", "acc-1"]
+        )
+
+    async def test_account_id_not_duplicated(self, mock_monarch_client):
+        await get_transactions(account_id="acc-1", account_ids=["acc-1"])
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, account_ids=["acc-1"]
+        )
+
+    async def test_search_filter(self, mock_monarch_client):
+        await get_transactions(search="order-123")
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, search="order-123"
+        )
+
+    async def test_boolean_filters(self, mock_monarch_client):
+        await get_transactions(has_notes=True, is_split=False, is_recurring=True)
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, has_notes=True, is_split=False, is_recurring=True
+        )
+
+    async def test_list_filters(self, mock_monarch_client):
+        await get_transactions(category_ids=["cat-1"], tag_ids=["tag-1", "tag-2"])
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, category_ids=["cat-1"], tag_ids=["tag-1", "tag-2"]
+        )
+
+    async def test_handles_empty_transactions(self, mock_monarch_client):
+        mock_monarch_client.get_transactions.return_value = {
+            "allTransactions": {"results": []}
+        }
+        result = json.loads(await get_transactions())
+        assert result == []
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.get_transactions.side_effect = Exception("Auth expired")
+        result = await get_transactions()
+        assert "get_transactions" in result
+
+
+class TestCreateTransaction:
+    async def test_creates_transaction(self):
+        result = json.loads(
+            await create_transaction(
+                date="2026-03-15",
+                account_id="acc-1",
+                amount=-25.00,
+                merchant_name="Coffee Shop",
+                category_id="cat-1",
+            )
+        )
+        assert "createTransaction" in result
+
+    async def test_passes_all_params(self, mock_monarch_client):
+        await create_transaction(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Coffee Shop",
+            category_id="cat-1",
+            notes="Morning coffee",
+            update_balance=True,
+        )
+        mock_monarch_client.create_transaction.assert_called_once_with(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Coffee Shop",
+            category_id="cat-1",
+            notes="Morning coffee",
+            update_balance=True,
+        )
+
+    async def test_omits_optional_params_when_not_set(self, mock_monarch_client):
+        await create_transaction(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Store",
+            category_id="cat-1",
+        )
+        mock_monarch_client.create_transaction.assert_called_once_with(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Store",
+            category_id="cat-1",
+        )
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.create_transaction.side_effect = Exception("Bad request")
+        result = await create_transaction(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Store",
+            category_id="cat-1",
+        )
+        assert "create_transaction" in result
+
+
+class TestUpdateTransaction:
+    async def test_updates_transaction(self):
+        result = json.loads(await update_transaction("txn-1", category_id="cat-2"))
+        assert "updateTransaction" in result
+
+    async def test_passes_only_provided_fields(self, mock_monarch_client):
+        await update_transaction("txn-1", amount=99.99, notes="Updated")
+        mock_monarch_client.update_transaction.assert_called_once_with(
+            transaction_id="txn-1", amount=99.99, notes="Updated"
+        )
+
+    async def test_passes_all_fields(self, mock_monarch_client):
+        await update_transaction(
+            "txn-1",
+            category_id="cat-2",
+            merchant_name="New Merchant",
+            goal_id="goal-1",
+            amount=50.00,
+            date="2026-04-01",
+            hide_from_reports=True,
+            needs_review=False,
+            notes="All fields",
+        )
+        mock_monarch_client.update_transaction.assert_called_once_with(
+            transaction_id="txn-1",
+            category_id="cat-2",
+            merchant_name="New Merchant",
+            goal_id="goal-1",
+            amount=50.00,
+            date="2026-04-01",
+            hide_from_reports=True,
+            needs_review=False,
+            notes="All fields",
+        )
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.update_transaction.side_effect = Exception("Not found")
+        result = await update_transaction("bad-id")
+        assert "update_transaction" in result
+
+
+class TestCategorizeTransaction:
+    async def test_categorizes(self, mock_monarch_client):
+        result = json.loads(await categorize_transaction("txn-1", "cat-2"))
+        assert "updateTransaction" in result
+        mock_monarch_client.update_transaction.assert_called_once_with(
+            transaction_id="txn-1", category_id="cat-2"
+        )
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.update_transaction.side_effect = Exception("boom")
+        result = await categorize_transaction("txn-1", "cat-2")
+        assert "categorize_transaction" in result
+
+
+class TestGetTransactions:
+    async def test_returns_formatted_transactions(self):
+        result = json.loads(await get_transactions())
+        assert len(result) == 2
+        assert result[0]["id"] == "txn-1"
+        assert result[0]["amount"] == -42.50
+        assert result[0]["category"] == "Groceries"
+        assert result[0]["category_id"] == "cat-1"
+        assert result[0]["account_id"] == "acc-1"
+        assert result[0]["merchant"] == "Whole Foods"
+        assert result[0]["needs_review"] is True
+        assert result[0]["notes"] == "weekly groceries"
+        assert result[0]["is_recurring"] is False
+        assert result[0]["review_status"] == "needs_review"
+        assert result[0]["is_split_transaction"] is False
+        assert result[0]["hide_from_reports"] is False
+        assert result[0]["tags"] == [{"id": "tag-1", "name": "business"}]
+
+    async def test_handles_null_merchant(self):
+        result = json.loads(await get_transactions())
+        assert result[1]["merchant"] is None
+        assert result[1]["notes"] is None
+        assert result[1]["needs_review"] is False
+        assert result[1]["tags"] == []
+
+    async def test_handles_null_category(self, mock_monarch_client):
+        mock_monarch_client.get_transactions.return_value = {
+            "allTransactions": {
+                "results": [
+                    {
+                        "id": "txn-3",
+                        "date": "2026-03-03",
+                        "amount": -10.00,
+                        "description": "ATM",
+                        "category": None,
+                        "account": {"id": "acc-1", "displayName": "Checking"},
+                        "merchant": None,
+                        "isPending": True,
+                        "needsReview": False,
+                        "notes": None,
+                        "isRecurring": False,
+                        "reviewStatus": None,
+                        "isSplitTransaction": False,
+                        "hideFromReports": False,
+                        "tags": [],
+                    }
+                ]
+            }
+        }
+        result = json.loads(await get_transactions())
+        assert result[0]["category"] is None
+        assert result[0]["category_id"] is None
+        assert result[0]["is_pending"] is True
+
+    async def test_passes_filters_to_client(self, mock_monarch_client):
+        await get_transactions(
+            limit=10, offset=5, start_date="2026-03-01", account_id="acc-1"
+        )
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=10,
+            offset=5,
+            start_date="2026-03-01",
+            account_ids=["acc-1"],
+        )
+
+    async def test_account_id_backward_compat(self, mock_monarch_client):
+        await get_transactions(account_id="acc-1")
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, account_ids=["acc-1"]
+        )
+
+    async def test_account_id_merged_with_account_ids(self, mock_monarch_client):
+        await get_transactions(account_id="acc-1", account_ids=["acc-2"])
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, account_ids=["acc-2", "acc-1"]
+        )
+
+    async def test_account_id_not_duplicated(self, mock_monarch_client):
+        await get_transactions(account_id="acc-1", account_ids=["acc-1"])
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, account_ids=["acc-1"]
+        )
+
+    async def test_search_filter(self, mock_monarch_client):
+        await get_transactions(search="order-123")
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, search="order-123"
+        )
+
+    async def test_boolean_filters(self, mock_monarch_client):
+        await get_transactions(has_notes=True, is_split=False, is_recurring=True)
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, has_notes=True, is_split=False, is_recurring=True
+        )
+
+    async def test_list_filters(self, mock_monarch_client):
+        await get_transactions(category_ids=["cat-1"], tag_ids=["tag-1", "tag-2"])
+        mock_monarch_client.get_transactions.assert_called_once_with(
+            limit=100, offset=0, category_ids=["cat-1"], tag_ids=["tag-1", "tag-2"]
+        )
+
+    async def test_handles_empty_transactions(self, mock_monarch_client):
+        mock_monarch_client.get_transactions.return_value = {
+            "allTransactions": {"results": []}
+        }
+        result = json.loads(await get_transactions())
+        assert result == []
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.get_transactions.side_effect = Exception("Auth expired")
+        result = await get_transactions()
+        assert "get_transactions" in result
+
+
+class TestCreateTransaction:
+    async def test_creates_transaction(self):
+        result = json.loads(
+            await create_transaction(
+                date="2026-03-15",
+                account_id="acc-1",
+                amount=-25.00,
+                merchant_name="Coffee Shop",
+                category_id="cat-1",
+            )
+        )
+        assert "createTransaction" in result
+
+    async def test_passes_all_params(self, mock_monarch_client):
+        await create_transaction(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Coffee Shop",
+            category_id="cat-1",
+            notes="Morning coffee",
+            update_balance=True,
+        )
+        mock_monarch_client.create_transaction.assert_called_once_with(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Coffee Shop",
+            category_id="cat-1",
+            notes="Morning coffee",
+            update_balance=True,
+        )
+
+    async def test_omits_optional_params_when_not_set(self, mock_monarch_client):
+        await create_transaction(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Store",
+            category_id="cat-1",
+        )
+        mock_monarch_client.create_transaction.assert_called_once_with(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Store",
+            category_id="cat-1",
+        )
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.create_transaction.side_effect = Exception("Bad request")
+        result = await create_transaction(
+            date="2026-03-15",
+            account_id="acc-1",
+            amount=-25.00,
+            merchant_name="Store",
+            category_id="cat-1",
+        )
+        assert "create_transaction" in result
+
+
+class TestUpdateTransaction:
+    async def test_updates_transaction(self):
+        result = json.loads(await update_transaction("txn-1", category_id="cat-2"))
+        assert "updateTransaction" in result
+
+    async def test_passes_only_provided_fields(self, mock_monarch_client):
+        await update_transaction("txn-1", amount=99.99, notes="Updated")
+        mock_monarch_client.update_transaction.assert_called_once_with(
+            transaction_id="txn-1", amount=99.99, notes="Updated"
+        )
+
+    async def test_passes_all_fields(self, mock_monarch_client):
+        await update_transaction(
+            "txn-1",
+            category_id="cat-2",
+            merchant_name="New Merchant",
+            goal_id="goal-1",
+            amount=50.00,
+            date="2026-04-01",
+            hide_from_reports=True,
+            needs_review=False,
+            notes="All fields",
+        )
+        mock_monarch_client.update_transaction.assert_called_once_with(
+            transaction_id="txn-1",
+            category_id="cat-2",
+            merchant_name="New Merchant",
+            goal_id="goal-1",
+            amount=50.00,
+            date="2026-04-01",
+            hide_from_reports=True,
+            needs_review=False,
+            notes="All fields",
+        )
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.update_transaction.side_effect = Exception("Not found")
+        result = await update_transaction("bad-id")
+        assert "update_transaction" in result
+
+
+class TestCategorizeTransaction:
+    async def test_categorizes(self, mock_monarch_client):
+        result = json.loads(await categorize_transaction("txn-1", "cat-2"))
+        assert "updateTransaction" in result
+        mock_monarch_client.update_transaction.assert_called_once_with(
+            transaction_id="txn-1", category_id="cat-2"
+        )
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.update_transaction.side_effect = Exception("boom")
+        result = await categorize_transaction("txn-1", "cat-2")
+        assert "categorize_transaction" in result

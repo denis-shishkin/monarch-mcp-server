@@ -27,40 +27,8 @@ async def get_budgets(
     """
     try:
         client = await get_monarch_client()
-        filters: Dict[str, Any] = {}
-        if start_date:
-            filters["start_date"] = start_date
-        if end_date:
-            filters["end_date"] = end_date
-        budgets = await client.get_budgets(**filters)
-
-        budget_list = []
-        for budget in budgets.get("budgetData", {}).get("budgetMonths", []):
-            month_info: Dict[str, Any] = {
-                "month": budget.get("month"),
-                "total_budgeted": budget.get("totalBudgeted"),
-                "total_spent": budget.get("totalSpent"),
-                "categories": [],
-            }
-
-            for cat_group in budget.get("categoryGroups", []):
-                group_name = cat_group.get("categoryGroup", {}).get("name")
-                for cat in cat_group.get("categories", []):
-                    cat_info = {
-                        "category_id": cat.get("category", {}).get("id"),
-                        "category_name": cat.get("category", {}).get("name"),
-                        "category_icon": cat.get("category", {}).get("icon"),
-                        "group": group_name,
-                        "budgeted": cat.get("budgetedAmount"),
-                        "spent": cat.get("actualAmount"),
-                        "remaining": cat.get("remainingAmount"),
-                        "rollover": cat.get("rolloverAmount"),
-                    }
-                    month_info["categories"].append(cat_info)
-
-            budget_list.append(month_info)
-
-        return json_success(budget_list)
+        budgets = await client.get_budgets(start_date=start_date, end_date=end_date)
+        return json_success(budgets)
     except Exception as e:
         return json_error("get_budgets", e)
 
