@@ -24,6 +24,7 @@ from monarch_mcp_server.tools.accounts import (  # noqa: F401
     refresh_accounts,
     get_account_holdings,
     get_account_balance_history,
+    upload_account_balance_history,
 )
 from monarch_mcp_server.tools.transactions import (  # noqa: F401
     get_transactions,

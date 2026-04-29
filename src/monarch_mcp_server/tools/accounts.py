@@ -1,6 +1,8 @@
 """Account management tools."""
 
+import json
 import logging
+from datetime import datetime
 from typing import Optional
 
 from monarch_mcp_server.app import mcp
@@ -83,9 +85,7 @@ async def get_account_balance_history(account_id: str) -> str:
     """
     try:
         client = await get_monarch_client()
-        result = await client.get_account_history(account_id=int(account_id))
-
-        snapshots = result.get("accountSnapshotHistory", {}).get("snapshots", [])
+        snapshots = await client.get_account_history(account_id=int(account_id))
 
         formatted = {
             "account_id": account_id,
@@ -111,3 +111,58 @@ async def get_account_balance_history(account_id: str) -> str:
         return json_success(formatted)
     except Exception as e:
         return json_error("get_account_balance_history", e)
+
+
+@mcp.tool()
+async def upload_account_balance_history(account_id: str, corrections: str) -> str:
+    """
+    Upload corrected balance snapshots for an account.
+
+    Fetches the full existing balance history, applies the corrections,
+    and re-uploads the complete history.
+
+    Args:
+        account_id: The ID of the account to correct
+        corrections: JSON object mapping dates to corrected balances,
+                     e.g. '{"2026-04-23": 24846.45, "2026-04-24": 24846.45}'
+    """
+    try:
+        from monarchmoney.monarchmoney import BalanceHistoryRow
+
+        date_to_balance = json.loads(corrections)
+
+        client = await get_monarch_client()
+        snapshots = await client.get_account_history(account_id=int(account_id))
+
+        applied = []
+        rows = []
+        for snapshot in snapshots:
+            date_str = snapshot.get("date")
+            balance = snapshot.get("signedBalance", 0)
+            account_name = snapshot.get("accountName", "")
+
+            if date_str in date_to_balance:
+                balance = date_to_balance[date_str]
+                applied.append(date_str)
+
+            rows.append(BalanceHistoryRow(
+                date=datetime.strptime(date_str, "%Y-%m-%d"),
+                amount=balance,
+                account_name=account_name,
+            ))
+
+        if not applied:
+            return json_success({"updated": False, "message": "No matching dates found in history"})
+
+        result = await client.upload_account_balance_history(
+            account_id=account_id,
+            csv_content=rows,
+        )
+
+        return json_success({
+            "updated": result,
+            "dates_corrected": applied,
+            "total_snapshots": len(rows),
+        })
+    except Exception as e:
+        return json_error("upload_account_balance_history", e)
