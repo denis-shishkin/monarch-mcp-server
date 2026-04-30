@@ -193,6 +193,14 @@ def mock_monarch_client():
         "createTransactionTag": {"tag": {"id": "tag-new", "name": "new", "color": "#0000ff"}}
     }
 
+    client.get_account_history.return_value = [
+        {"date": "2026-04-20", "signedBalance": 1000.0, "accountId": "acc-1", "accountName": "Checking Account"},
+        {"date": "2026-04-21", "signedBalance": 1200.0, "accountId": "acc-1", "accountName": "Checking Account"},
+        {"date": "2026-04-22", "signedBalance": 1100.0, "accountId": "acc-1", "accountName": "Checking Account"},
+    ]
+
+    client.upload_account_balance_history.return_value = True
+
     return client
 
 

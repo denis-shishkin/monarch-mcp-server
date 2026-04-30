@@ -6,6 +6,8 @@ from monarch_mcp_server.tools.accounts import (
     get_accounts,
     get_account_holdings,
     refresh_accounts,
+    get_account_balance_history,
+    upload_account_balance_history,
 )
 
 
@@ -80,3 +82,50 @@ class TestRefreshAccounts:
         mock_monarch_client.request_accounts_refresh.side_effect = Exception("Timeout")
         result = await refresh_accounts()
         assert "refresh_accounts" in result
+
+
+class TestGetAccountBalanceHistory:
+    async def test_returns_formatted_snapshots(self):
+        result = json.loads(await get_account_balance_history("12345"))
+        assert result["account_id"] == "12345"
+        assert result["snapshot_count"] == 3
+        assert result["current_balance"] == 1100.0
+        assert result["earliest_balance"] == 1000.0
+        assert result["highest"] == 1200.0
+        assert result["lowest"] == 1000.0
+        assert result["snapshots"][0] == {"date": "2026-04-20", "balance": 1000.0}
+
+    async def test_handles_empty_history(self, mock_monarch_client):
+        mock_monarch_client.get_account_history.return_value = []
+        result = json.loads(await get_account_balance_history("12345"))
+        assert result["snapshot_count"] == 0
+        assert result["snapshots"] == []
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.get_account_history.side_effect = Exception("Not found")
+        result = await get_account_balance_history("12345")
+        assert "get_account_balance_history" in result
+
+
+class TestUploadAccountBalanceHistory:
+    async def test_applies_corrections(self, mock_monarch_client):
+        corrections = json.dumps({"2026-04-21": 900.0})
+        result = json.loads(await upload_account_balance_history("12345", corrections))
+        assert result["updated"] is True
+        assert result["dates_corrected"] == ["2026-04-21"]
+        assert result["total_snapshots"] == 3
+
+        call_args = mock_monarch_client.upload_account_balance_history.call_args
+        assert call_args.kwargs["account_id"] == "12345"
+        assert len(call_args.kwargs["csv_content"]) == 3
+
+    async def test_no_matching_dates(self, mock_monarch_client):
+        corrections = json.dumps({"2026-01-01": 500.0})
+        result = json.loads(await upload_account_balance_history("12345", corrections))
+        assert result["updated"] is False
+        mock_monarch_client.upload_account_balance_history.assert_not_called()
+
+    async def test_handles_api_error(self, mock_monarch_client):
+        mock_monarch_client.get_account_history.side_effect = Exception("Timeout")
+        result = await upload_account_balance_history("12345", '{"2026-04-21": 0}')
+        assert "upload_account_balance_history" in result
