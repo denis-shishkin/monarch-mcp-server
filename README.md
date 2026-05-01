@@ -238,7 +238,7 @@ Once authenticated, use these tools directly in Claude Desktop or Claude Code:
 | `setup_authentication` | Get setup instructions | None |
 | `check_auth_status` | Check authentication status | None |
 | `get_accounts` | Get all financial accounts | None |
-| `get_transactions` | Get transactions with filtering | `limit`, `offset`, `start_date`, `end_date`, `account_id` |
+| `get_transactions` | Get transactions with filtering and reconciliation fields | `limit`, `offset`, `start_date`, `end_date`, `account_id`, `account_ids`, `category_ids`, `category_group_ids`, `tag_ids`, `search`, `wide_search`, `search_scan_limit`, `has_notes`, `is_split`, `is_recurring` |
 | `get_budgets` | Get budget information | `start_date`, `end_date` |
 | `set_budget_amount` | Set budget for a category | `amount`, `category_id`, `category_group_id`, `start_date`, `apply_to_future` |
 | `get_cashflow` | Get cashflow analysis | `start_date`, `end_date` |
@@ -283,6 +283,8 @@ Use get_accounts to show me all my financial accounts
 ```
 Show me my last 50 transactions using get_transactions with limit 50
 ```
+
+`get_transactions` returns a JSON object with `tool`, `args`, `count`, `total_count`, `truncated`, `search`, and `data` so large `agent-tools/<uuid>.txt` responses are self-describing. Transaction rows live in `data` and include `original_statement` / `plaid_description` when Monarch provides the underlying Plaid statement text, plus `currency`, `direction`, `direction_source`, `transaction_type`, `category_group`, and `category_group_id` when those values can be derived from Monarch response data. When Monarch's server-side `search` errors or returns no rows, `wide_search` scans recent transactions locally across merchant, original statement, description, notes, category, account, and tags.
 
 ### Check Spending vs Budget
 ```
