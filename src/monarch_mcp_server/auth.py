@@ -13,6 +13,20 @@ from pydantic import BaseModel, Field
 from monarch_mcp_server.secure_session import secure_session
 
 
+_UPGRADE_HINT = (
+    "Elicitation requires the MCP Python SDK >= 1.10.0 (added in June 2025). "
+    "Your MCP server install appears to be running an older version that does "
+    "not expose Context.elicit. Upgrade the `mcp` package, then restart your "
+    "MCP client. If you launch via `uv run --with mcp[cli]`, run `uv cache "
+    "clean mcp` first so a fresh version is resolved. As a fallback, run "
+    "`python login_setup.py` from the repo to authenticate via terminal."
+)
+
+
+def _elicit_supported(ctx: Context) -> bool:
+    return hasattr(ctx, "elicit")
+
+
 class LoginForm(BaseModel):
     email: str = Field(description="Monarch Money email address")
     password: str = Field(description="Monarch Money password")
@@ -32,6 +46,8 @@ class TokenForm(BaseModel):
 
 
 async def login_interactive(ctx: Context) -> str:
+    if not _elicit_supported(ctx):
+        return _UPGRADE_HINT
     form_result = await ctx.elicit(message="Sign in to Monarch Money.", schema=LoginForm)
     if form_result.action != "accept":
         return "Login cancelled."
@@ -60,6 +76,8 @@ async def login_interactive(ctx: Context) -> str:
 
 
 async def login_with_token_interactive(ctx: Context) -> str:
+    if not _elicit_supported(ctx):
+        return _UPGRADE_HINT
     form_result = await ctx.elicit(
         message="Paste your Monarch Money session token.", schema=TokenForm
     )

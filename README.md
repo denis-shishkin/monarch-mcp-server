@@ -388,6 +388,15 @@ Sessions last for weeks, but if expired:
 2. Enter your credentials and 2FA code
 3. Session will be refreshed automatically
 
+### `'Context' object has no attribute 'elicit'`
+The `monarch_login` and `monarch_login_with_token` tools require the MCP Python SDK 1.10.0 or newer (released June 2025). If your environment cached an older `mcp` install, refresh it:
+
+```bash
+uv cache clean mcp
+```
+
+Then fully quit and reopen Claude Desktop or Claude Code so it relaunches the server with a fresh resolution. As a fallback while you upgrade, run `python login_setup.py` from the repo to authenticate via the terminal.
+
 ### Common Error Messages
 - **"No valid session found"**: Run `python login_setup.py` (or `uv run python login_setup.py`) 
 - **"Invalid account ID"**: Use `get_accounts` to see valid account IDs
