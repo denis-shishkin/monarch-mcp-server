@@ -2,14 +2,25 @@
 
 import json
 import logging
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Dict, Optional
+
+from pydantic import RootModel, ValidationError
 
 from monarch_mcp_server.app import mcp
 from monarch_mcp_server.client import get_monarch_client
 from monarch_mcp_server.helpers import json_success, json_error
 
 logger = logging.getLogger(__name__)
+
+
+class BalanceCorrections(RootModel[Dict[date, Decimal]]):
+    """Validates the corrections payload for upload_account_balance_history.
+
+    Keys must be ISO dates (YYYY-MM-DD) and values must parse as decimals.
+    Pydantic raises on bad input rather than letting typos silently no-op.
+    """
 
 
 @mcp.tool()
@@ -114,7 +125,11 @@ async def get_account_balance_history(account_id: str) -> str:
 
 
 @mcp.tool()
-async def upload_account_balance_history(account_id: str, corrections: str) -> str:
+async def upload_account_balance_history(
+    account_id: str,
+    corrections: str,
+    dry_run: bool = False,
+) -> str:
     """
     Upload corrected balance snapshots for an account.
 
@@ -123,26 +138,60 @@ async def upload_account_balance_history(account_id: str, corrections: str) -> s
 
     Args:
         account_id: The ID of the account to correct
-        corrections: JSON object mapping dates to corrected balances,
-                     e.g. '{"2026-04-23": 24846.45, "2026-04-24": 24846.45}'
+        corrections: JSON object mapping ISO dates (YYYY-MM-DD) to corrected
+                     balances, e.g. '{"2026-04-23": 24846.45, "2026-04-24": 24846.45}'
+        dry_run: If True, return the planned changes without uploading
+
+    Mismatched dates (corrections that do not match any existing snapshot) are
+    surfaced explicitly in the response rather than silently dropped.
     """
     try:
-        from monarchmoney.monarchmoney import BalanceHistoryRow
+        try:
+            raw = json.loads(corrections)
+        except json.JSONDecodeError as exc:
+            return json_error(
+                "upload_account_balance_history",
+                ValueError(f"corrections is not valid JSON: {exc.msg}"),
+            )
 
-        date_to_balance = json.loads(corrections)
+        if not isinstance(raw, dict):
+            return json_error(
+                "upload_account_balance_history",
+                ValueError("corrections must be a JSON object mapping dates to numbers"),
+            )
+
+        try:
+            validated = BalanceCorrections.model_validate(raw)
+        except ValidationError as exc:
+            return json_error("upload_account_balance_history", exc)
+
+        date_to_balance: Dict[str, Decimal] = {
+            d.isoformat(): amount for d, amount in validated.root.items()
+        }
+
+        if not date_to_balance:
+            return json_success({
+                "updated": False,
+                "message": "No corrections provided",
+            })
+
+        from monarchmoney.monarchmoney import BalanceHistoryRow
 
         client = await get_monarch_client()
         snapshots = await client.get_account_history(account_id=int(account_id))
 
-        applied = []
-        rows = []
+        existing_dates = {s.get("date") for s in snapshots}
+        unmatched = sorted(d for d in date_to_balance if d not in existing_dates)
+
+        applied: list[str] = []
+        rows: list[BalanceHistoryRow] = []
         for snapshot in snapshots:
             date_str = snapshot.get("date")
             balance = snapshot.get("signedBalance", 0)
             account_name = snapshot.get("accountName", "")
 
             if date_str in date_to_balance:
-                balance = date_to_balance[date_str]
+                balance = float(date_to_balance[date_str])
                 applied.append(date_str)
 
             rows.append(BalanceHistoryRow(
@@ -152,7 +201,20 @@ async def upload_account_balance_history(account_id: str, corrections: str) -> s
             ))
 
         if not applied:
-            return json_success({"updated": False, "message": "No matching dates found in history"})
+            return json_success({
+                "updated": False,
+                "message": "No matching dates found in history",
+                "unmatched_dates": unmatched,
+            })
+
+        if dry_run:
+            return json_success({
+                "dry_run": True,
+                "account_id": account_id,
+                "dates_to_correct": applied,
+                "unmatched_dates": unmatched,
+                "total_snapshots": len(rows),
+            })
 
         result = await client.upload_account_balance_history(
             account_id=account_id,
@@ -162,6 +224,7 @@ async def upload_account_balance_history(account_id: str, corrections: str) -> s
         return json_success({
             "updated": result,
             "dates_corrected": applied,
+            "unmatched_dates": unmatched,
             "total_snapshots": len(rows),
         })
     except Exception as e:

@@ -370,6 +370,23 @@ class TestBulkCategorizeTransactions:
         assert data["error"] is True
         assert "Auth needed" in data["message"]
 
+    @patch('monarch_mcp_server.tools.transactions.get_monarch_client')
+    async def test_bulk_categorize_dry_run_skips_client(self, mock_get_client):
+        """dry_run returns the planned update without calling the SDK."""
+        result = await bulk_categorize_transactions(
+            transaction_ids=["txn_1", "txn_2"],
+            category_id="cat_123",
+            dry_run=True,
+        )
+
+        data = json.loads(result)
+        assert data["dry_run"] is True
+        assert data["total"] == 2
+        assert data["transaction_ids"] == ["txn_1", "txn_2"]
+        assert data["category_id"] == "cat_123"
+        assert data["mark_reviewed"] is True
+        mock_get_client.assert_not_called()
+
 
 class TestSearchTransactions:
     """Tests for search_transactions tool."""

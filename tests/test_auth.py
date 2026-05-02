@@ -108,3 +108,41 @@ class TestLogout:
         result = asyncio.run(auth.logout())
         assert "Cleared" in result
         no_session_save.delete_token.assert_called_once()
+
+
+class TestDebugSessionLoading:
+    def test_no_token_message(self):
+        from monarch_mcp_server.tools import auth as tools_auth
+
+        with patch(
+            "monarch_mcp_server.tools.auth.secure_session.load_token",
+            return_value=None,
+        ):
+            result = asyncio.run(tools_auth.debug_session_loading())
+        assert "No token" in result
+
+    def test_token_present_does_not_leak_length(self):
+        from monarch_mcp_server.tools import auth as tools_auth
+
+        with patch(
+            "monarch_mcp_server.tools.auth.secure_session.load_token",
+            return_value="a-secret-token-value",
+        ):
+            result = asyncio.run(tools_auth.debug_session_loading())
+        assert "Token found" in result
+        assert "length" not in result.lower()
+        assert "a-secret-token-value" not in result
+
+    def test_keyring_failure_omits_traceback(self):
+        from monarch_mcp_server.tools import auth as tools_auth
+
+        with patch(
+            "monarch_mcp_server.tools.auth.secure_session.load_token",
+            side_effect=RuntimeError("keyring backend unavailable"),
+        ):
+            result = asyncio.run(tools_auth.debug_session_loading())
+        assert "Keyring access failed" in result
+        assert "RuntimeError" in result
+        assert "keyring backend unavailable" in result
+        assert "Traceback" not in result
+        assert 'File "' not in result
