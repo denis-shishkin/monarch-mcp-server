@@ -2,7 +2,6 @@
 
 import logging
 import os
-import traceback
 
 from mcp.server.fastmcp import Context
 
@@ -89,9 +88,8 @@ async def debug_session_loading() -> str:
     try:
         token = secure_session.load_token()
         if token:
-            return f"✅ Token found in keyring (length: {len(token)})"
-        else:
-            return "❌ No token found in keyring. Run login_setup.py to authenticate."
+            return "✅ Token found in keyring."
+        return "❌ No token found in keyring. Run login_setup.py to authenticate."
     except Exception as e:
-        error_details = traceback.format_exc()
-        return f"❌ Keyring access failed:\nError: {str(e)}\nType: {type(e)}\nTraceback:\n{error_details}"
+        logger.exception("Keyring access failed")
+        return f"❌ Keyring access failed: {type(e).__name__}: {e}"

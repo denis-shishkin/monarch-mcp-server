@@ -392,6 +392,7 @@ async def bulk_categorize_transactions(
     transaction_ids: List[str],
     category_id: str,
     mark_reviewed: bool = True,
+    dry_run: bool = False,
 ) -> str:
     """
     Apply the same category to multiple transactions at once.
@@ -403,11 +404,22 @@ async def bulk_categorize_transactions(
         transaction_ids: List of transaction IDs to categorize
         category_id: The category ID to apply to all transactions
         mark_reviewed: Whether to also mark transactions as reviewed (default: True)
+        dry_run: If True, return what would be updated without making changes
 
     Returns:
-        Summary of results including success/failure counts.
+        Summary of results including success/failure counts. When dry_run is
+        True, the response includes a "dry_run" flag and the planned updates.
     """
     try:
+        if dry_run:
+            return json_success({
+                "dry_run": True,
+                "total": len(transaction_ids),
+                "transaction_ids": list(transaction_ids),
+                "category_id": category_id,
+                "mark_reviewed": mark_reviewed,
+            })
+
         client = await get_monarch_client()
 
         results: Dict[str, Any] = {

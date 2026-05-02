@@ -113,6 +113,7 @@ class TestUploadAccountBalanceHistory:
         result = json.loads(await upload_account_balance_history("12345", corrections))
         assert result["updated"] is True
         assert result["dates_corrected"] == ["2026-04-21"]
+        assert result["unmatched_dates"] == []
         assert result["total_snapshots"] == 3
 
         call_args = mock_monarch_client.upload_account_balance_history.call_args
@@ -123,7 +124,57 @@ class TestUploadAccountBalanceHistory:
         corrections = json.dumps({"2026-01-01": 500.0})
         result = json.loads(await upload_account_balance_history("12345", corrections))
         assert result["updated"] is False
+        assert result["unmatched_dates"] == ["2026-01-01"]
         mock_monarch_client.upload_account_balance_history.assert_not_called()
+
+    async def test_surfaces_unmatched_alongside_applied(self, mock_monarch_client):
+        corrections = json.dumps({"2026-04-21": 900.0, "2099-12-31": 1.0})
+        result = json.loads(await upload_account_balance_history("12345", corrections))
+        assert result["updated"] is True
+        assert result["dates_corrected"] == ["2026-04-21"]
+        assert result["unmatched_dates"] == ["2099-12-31"]
+
+    async def test_dry_run_skips_upload(self, mock_monarch_client):
+        corrections = json.dumps({"2026-04-21": 900.0})
+        result = json.loads(
+            await upload_account_balance_history("12345", corrections, dry_run=True)
+        )
+        assert result["dry_run"] is True
+        assert result["dates_to_correct"] == ["2026-04-21"]
+        assert result["total_snapshots"] == 3
+        mock_monarch_client.upload_account_balance_history.assert_not_called()
+
+    async def test_rejects_invalid_json(self, mock_monarch_client):
+        result = json.loads(
+            await upload_account_balance_history("12345", "not json")
+        )
+        assert result["error"] is True
+        assert "valid JSON" in result["message"]
+        mock_monarch_client.get_account_history.assert_not_called()
+
+    async def test_rejects_non_object(self, mock_monarch_client):
+        result = json.loads(
+            await upload_account_balance_history("12345", "[1, 2, 3]")
+        )
+        assert result["error"] is True
+        assert "JSON object" in result["message"]
+        mock_monarch_client.get_account_history.assert_not_called()
+
+    async def test_rejects_invalid_date_key(self, mock_monarch_client):
+        result = json.loads(
+            await upload_account_balance_history("12345", '{"yesterday": 100}')
+        )
+        assert result["error"] is True
+        mock_monarch_client.get_account_history.assert_not_called()
+
+    async def test_rejects_non_numeric_value(self, mock_monarch_client):
+        result = json.loads(
+            await upload_account_balance_history(
+                "12345", '{"2026-04-21": "not-a-number"}'
+            )
+        )
+        assert result["error"] is True
+        mock_monarch_client.get_account_history.assert_not_called()
 
     async def test_handles_api_error(self, mock_monarch_client):
         mock_monarch_client.get_account_history.side_effect = Exception("Timeout")
