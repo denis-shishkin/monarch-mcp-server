@@ -146,3 +146,20 @@ class TestDebugSessionLoading:
         assert "keyring backend unavailable" in result
         assert "Traceback" not in result
         assert 'File "' not in result
+
+
+class TestElicitNotSupported:
+    """Older MCP SDKs (<1.10) do not expose Context.elicit."""
+
+    def test_login_interactive_returns_upgrade_hint(self, no_session_save):
+        ctx = SimpleNamespace()  # no elicit attribute
+        result = asyncio.run(auth.login_interactive(ctx))
+        assert "1.10" in result
+        assert "login_setup.py" in result
+        no_session_save.save_authenticated_session.assert_not_called()
+
+    def test_login_with_token_returns_upgrade_hint(self, no_session_save):
+        ctx = SimpleNamespace()
+        result = asyncio.run(auth.login_with_token_interactive(ctx))
+        assert "1.10" in result
+        no_session_save.save_token.assert_not_called()
