@@ -11,7 +11,14 @@ from typing import Any, Dict, List, Optional
 
 from monarch_mcp_server.app import mcp
 from monarch_mcp_server.client import get_monarch_client
-from monarch_mcp_server.helpers import format_transaction, json_success, json_error
+from monarch_mcp_server.helpers import (
+    first_present,
+    format_exception,
+    format_transaction,
+    json_error,
+    json_success,
+    tool_response_envelope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +42,6 @@ KNOWN_CURRENCY_CODES = {
     "USD",
     "ZAR",
 }
-
-
-def _format_exception(error: Exception) -> str:
-    message = str(error).strip()
-    if message:
-        return message
-    return repr(error) if repr(error) else type(error).__name__
-
-
-def _first_present(*values: Any) -> Any:
-    for value in values:
-        if value is not None and value != "":
-            return value
-    return None
 
 
 def _normalize_search_text(value: Any) -> str:
@@ -151,7 +144,7 @@ def _currency_from_transaction(txn: Dict[str, Any]) -> Optional[str]:
     account = txn.get("account") if isinstance(txn.get("account"), dict) else {}
     amount = txn.get("amount") if isinstance(txn.get("amount"), dict) else {}
 
-    direct_currency = _first_present(
+    direct_currency = first_present(
         txn.get("currency"),
         txn.get("currencyCode"),
         txn.get("isoCurrencyCode"),
@@ -164,40 +157,12 @@ def _currency_from_transaction(txn: Dict[str, Any]) -> Optional[str]:
     if direct_currency:
         return str(direct_currency).upper()
 
-    return _first_present(
+    return first_present(
         _currency_from_text(
             account.get("displayName") if isinstance(account, dict) else None
         ),
         _currency_from_text(account.get("name") if isinstance(account, dict) else None),
     )
-
-
-def _tool_response_envelope(
-    tool: str,
-    args: Dict[str, Any],
-    rows: List[Dict[str, Any]],
-    *,
-    total_count: Optional[int] = None,
-    search_info: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    count = len(rows)
-    limit = args.get("limit")
-    offset = args.get("offset") or 0
-    truncated = (
-        offset + count < total_count
-        if isinstance(total_count, int)
-        else isinstance(limit, int) and count == limit
-    )
-
-    return {
-        "tool": tool,
-        "args": args,
-        "count": count,
-        "total_count": total_count,
-        "truncated": truncated,
-        "search": search_info,
-        "data": rows,
-    }
 
 
 def _format_transaction_row(
@@ -215,15 +180,15 @@ def _format_transaction_row(
             category.get("group") if isinstance(category.get("group"), dict) else {}
         )
         txn_category_metadata = {
-            "group": _first_present(
+            "group": first_present(
                 txn_category_metadata.get("group"),
                 category_group.get("name"),
             ),
-            "group_id": _first_present(
+            "group_id": first_present(
                 txn_category_metadata.get("group_id"),
                 category_group.get("id"),
             ),
-            "group_type": _first_present(
+            "group_type": first_present(
                 txn_category_metadata.get("group_type"),
                 category_group.get("type"),
             ),
@@ -231,13 +196,13 @@ def _format_transaction_row(
 
     amount = txn.get("amount")
     direction = _direction_from_amount(amount)
-    plaid_description = _first_present(
+    plaid_description = first_present(
         txn.get("plaidDescription"),
         txn.get("plaidName"),
         txn.get("originalStatement"),
     )
-    original_statement = _first_present(txn.get("originalStatement"), plaid_description)
-    transaction_type = _first_present(
+    original_statement = first_present(txn.get("originalStatement"), plaid_description)
+    transaction_type = first_present(
         txn.get("transactionType"),
         txn.get("type"),
         txn.get("kind"),
@@ -393,7 +358,7 @@ async def get_transactions(
                     "search_scan_limit": search_scan_limit,
                 }
                 return json_success(
-                    _tool_response_envelope(
+                    tool_response_envelope(
                         "get_transactions",
                         empty_args,
                         [],
@@ -454,7 +419,7 @@ async def get_transactions(
                 "scan_limit": scan_limit,
                 "scanned_count": len(fallback_results),
                 "server_error": (
-                    _format_exception(original_error) if original_error else None
+                    format_exception(original_error) if original_error else None
                 ),
             }
 
@@ -499,7 +464,7 @@ async def get_transactions(
                         search_info = {
                             "strategy": "lowercase_retry",
                             "fallback_reason": "server_error",
-                            "server_error": _format_exception(original_error),
+                            "server_error": format_exception(original_error),
                         }
                 except Exception as retry_error:
                     try:
@@ -511,9 +476,9 @@ async def get_transactions(
                             "Search failed for "
                             f"{search!r}; lowercase retry {retry_search!r} and "
                             "wide search also failed. "
-                            f"Original error: {_format_exception(original_error)}; "
-                            f"retry error: {_format_exception(retry_error)}; "
-                            f"wide search error: {_format_exception(fallback_error)}"
+                            f"Original error: {format_exception(original_error)}; "
+                            f"retry error: {format_exception(retry_error)}; "
+                            f"wide search error: {format_exception(fallback_error)}"
                         ) from fallback_error
 
         all_transactions = transactions.get("allTransactions", {})
@@ -538,14 +503,14 @@ async def get_transactions(
             "wide_search": wide_search,
             "search_scan_limit": search_scan_limit,
         }
-        total_count = _first_present(
+        total_count = first_present(
             all_transactions.get("totalCount"),
             all_transactions.get("total_count"),
             all_transactions.get("count"),
         )
 
         return json_success(
-            _tool_response_envelope(
+            tool_response_envelope(
                 "get_transactions",
                 args_summary,
                 transaction_list,
@@ -558,7 +523,7 @@ async def get_transactions(
             {
                 "error": True,
                 "tool": "get_transactions",
-                "message": _format_exception(e),
+                "message": format_exception(e),
             },
             indent=2,
             default=str,
