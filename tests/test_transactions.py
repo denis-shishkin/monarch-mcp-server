@@ -799,18 +799,30 @@ class TestGetTransactions:
             {"allTransactions": {"results": []}},
             response,
         ]
-        result = await self._transaction_response(search="whole foods", limit=10)
+        result = await self._transaction_response(
+            search="whole foods", limit=10, wide_search=True
+        )
         assert result["count"] == 1
         assert result["data"][0]["id"] == "txn-1"
         assert result["search"]["strategy"] == "wide"
         assert result["search"]["fallback_reason"] == "empty_server_results"
-        assert result["search"]["scan_limit"] == 1000
+        assert result["search"]["scan_limit"] == 200
         mock_monarch_client.get_transactions.assert_has_calls(
             [
                 call(limit=10, offset=0, search="whole foods"),
-                call(limit=1000, offset=0),
+                call(limit=200, offset=0),
             ]
         )
+
+    async def test_wide_search_off_by_default(self, mock_monarch_client):
+        mock_monarch_client.get_transactions.return_value = {
+            "allTransactions": {"results": []}
+        }
+        result = await self._transaction_response(search="whole foods", limit=10)
+        assert result["count"] == 0
+        assert result["search"]["strategy"] == "server"
+        # Only one call: the server-side search. No local-scan fallback.
+        assert mock_monarch_client.get_transactions.call_count == 1
 
     async def test_search_errors_fall_back_to_wide_search(self, mock_monarch_client):
         response = mock_monarch_client.get_transactions.return_value
@@ -819,7 +831,9 @@ class TestGetTransactions:
             Exception(),
             response,
         ]
-        result = await self._transaction_response(search="WHOLE", limit=10)
+        result = await self._transaction_response(
+            search="WHOLE", limit=10, wide_search=True
+        )
         assert result["count"] == 1
         assert result["data"][0]["id"] == "txn-1"
         assert result["search"]["strategy"] == "wide"
@@ -828,7 +842,7 @@ class TestGetTransactions:
             [
                 call(limit=10, offset=0, search="WHOLE"),
                 call(limit=10, offset=0, search="whole"),
-                call(limit=1000, offset=0),
+                call(limit=200, offset=0),
             ]
         )
 

@@ -260,8 +260,8 @@ async def get_transactions(
     has_notes: Optional[bool] = None,
     is_split: Optional[bool] = None,
     is_recurring: Optional[bool] = None,
-    wide_search: bool = True,
-    search_scan_limit: int = 1000,
+    wide_search: bool = False,
+    search_scan_limit: int = 200,
 ) -> str:
     """
     Get transactions from Monarch Money.
@@ -280,8 +280,15 @@ async def get_transactions(
         has_notes: Filter for transactions with/without notes
         is_split: Filter for split transactions
         is_recurring: Filter for recurring transactions
-        wide_search: Fall back to a local scan across richer transaction fields
-        search_scan_limit: Maximum transactions to scan for wide_search fallback
+        wide_search: Opt-in fallback that pulls a page of transactions and
+                     filters them locally across description, original
+                     statement, plaid name, notes, merchant, category,
+                     account, and tags when Monarch's server-side search
+                     returns empty or errors. Off by default because it can
+                     be expensive; turn on when a search you expect to match
+                     comes back empty.
+        search_scan_limit: Maximum transactions the wide_search fallback
+                           will scan locally (default 200)
     """
     try:
         client = await get_monarch_client()
