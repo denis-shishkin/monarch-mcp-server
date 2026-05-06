@@ -74,9 +74,21 @@ class TestGetAccountHoldings:
 
 
 class TestRefreshAccounts:
-    async def test_refreshes_accounts(self):
+    async def test_refreshes_active_accounts(self, mock_monarch_client):
         result = json.loads(await refresh_accounts())
-        assert result["requestAccountsRefresh"]["success"] is True
+        assert result["requested"] is True
+        assert result["account_count"] == 2
+        mock_monarch_client.request_accounts_refresh.assert_called_once_with([
+            "acc-1",
+            "acc-2",
+        ])
+
+    async def test_handles_no_active_accounts(self, mock_monarch_client):
+        mock_monarch_client.get_accounts.return_value = {"accounts": []}
+        result = json.loads(await refresh_accounts())
+        assert result["updated"] is False
+        assert result["message"] == "No active accounts found to refresh"
+        mock_monarch_client.request_accounts_refresh.assert_not_called()
 
     async def test_handles_api_error(self, mock_monarch_client):
         mock_monarch_client.request_accounts_refresh.side_effect = Exception("Timeout")

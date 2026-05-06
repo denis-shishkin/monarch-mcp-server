@@ -145,9 +145,7 @@ def mock_monarch_client():
         "updateTransaction": {"transaction": {"id": "txn-1"}}
     }
 
-    client.request_accounts_refresh.return_value = {
-        "requestAccountsRefresh": {"success": True}
-    }
+    client.request_accounts_refresh.return_value = True
 
     client.get_transaction_categories.return_value = {
         "categories": [

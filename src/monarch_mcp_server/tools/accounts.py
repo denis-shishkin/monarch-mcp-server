@@ -55,8 +55,29 @@ async def refresh_accounts() -> str:
     """Request account data refresh from financial institutions."""
     try:
         client = await get_monarch_client()
-        result = await client.request_accounts_refresh()
-        return json_success(result)
+        accounts = await client.get_accounts()
+        account_ids = [
+            str(account.get("id"))
+            for account in accounts.get("accounts", [])
+            if account.get("id")
+            and (
+                account.get("isActive")
+                if "isActive" in account
+                else not account.get("deactivatedAt")
+            )
+        ]
+
+        if not account_ids:
+            return json_success({
+                "updated": False,
+                "message": "No active accounts found to refresh",
+            })
+
+        result = await client.request_accounts_refresh(account_ids)
+        return json_success({
+            "requested": bool(result),
+            "account_count": len(account_ids),
+        })
     except Exception as e:
         return json_error("refresh_accounts", e)
 
