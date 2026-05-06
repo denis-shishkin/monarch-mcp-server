@@ -51,8 +51,14 @@ def mock_monarch_client():
                     "id": "txn-1",
                     "date": "2026-03-01",
                     "amount": -42.50,
+                    "currencyCode": "CAD",
                     "description": "Grocery Store",
-                    "category": {"id": "cat-1", "name": "Groceries"},
+                    "plaidName": "WHOLE FOODS MARKET 10234",
+                    "category": {
+                        "id": "cat-1",
+                        "name": "Groceries",
+                        "group": {"id": "grp-1", "name": "Food", "type": "expense"},
+                    },
                     "account": {"id": "acc-1", "displayName": "Checking Account"},
                     "merchant": {"name": "Whole Foods"},
                     "isPending": False,
@@ -70,7 +76,7 @@ def mock_monarch_client():
                     "amount": 3000.00,
                     "description": "Paycheck",
                     "category": {"id": "cat-3", "name": "Income"},
-                    "account": {"id": "acc-1", "displayName": "Checking Account"},
+                    "account": {"id": "acc-1", "displayName": "Wise USD Balance"},
                     "merchant": None,
                     "isPending": False,
                     "needsReview": False,
@@ -149,13 +155,13 @@ def mock_monarch_client():
                 "id": "cat-1",
                 "name": "Groceries",
                 "icon": "🛒",
-                "group": {"id": "grp-1", "name": "Food"},
+                "group": {"id": "grp-1", "name": "Food", "type": "expense"},
             },
             {
                 "id": "cat-2",
                 "name": "Dining Out",
                 "icon": "🍽️",
-                "group": {"id": "grp-1", "name": "Food"},
+                "group": {"id": "grp-1", "name": "Food", "type": "expense"},
             },
         ]
     }
@@ -190,13 +196,30 @@ def mock_monarch_client():
     }
 
     client.create_transaction_tag.return_value = {
-        "createTransactionTag": {"tag": {"id": "tag-new", "name": "new", "color": "#0000ff"}}
+        "createTransactionTag": {
+            "tag": {"id": "tag-new", "name": "new", "color": "#0000ff"}
+        }
     }
 
     client.get_account_history.return_value = [
-        {"date": "2026-04-20", "signedBalance": 1000.0, "accountId": "acc-1", "accountName": "Checking Account"},
-        {"date": "2026-04-21", "signedBalance": 1200.0, "accountId": "acc-1", "accountName": "Checking Account"},
-        {"date": "2026-04-22", "signedBalance": 1100.0, "accountId": "acc-1", "accountName": "Checking Account"},
+        {
+            "date": "2026-04-20",
+            "signedBalance": 1000.0,
+            "accountId": "acc-1",
+            "accountName": "Checking Account",
+        },
+        {
+            "date": "2026-04-21",
+            "signedBalance": 1200.0,
+            "accountId": "acc-1",
+            "accountName": "Checking Account",
+        },
+        {
+            "date": "2026-04-22",
+            "signedBalance": 1100.0,
+            "accountId": "acc-1",
+            "accountName": "Checking Account",
+        },
     ]
 
     client.upload_account_balance_history.return_value = True

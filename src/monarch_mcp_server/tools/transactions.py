@@ -3,14 +3,259 @@
 import asyncio
 import json
 import logging
+import re
+import unicodedata
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 from monarch_mcp_server.app import mcp
 from monarch_mcp_server.client import get_monarch_client
-from monarch_mcp_server.helpers import format_transaction, json_success, json_error
+from monarch_mcp_server.helpers import (
+    first_present,
+    format_exception,
+    format_transaction,
+    json_error,
+    json_success,
+    tool_response_envelope,
+)
 
 logger = logging.getLogger(__name__)
+
+KNOWN_CURRENCY_CODES = {
+    "AED",
+    "AUD",
+    "BRL",
+    "CAD",
+    "CHF",
+    "CNY",
+    "EUR",
+    "GBP",
+    "HKD",
+    "JPY",
+    "MXN",
+    "NOK",
+    "NZD",
+    "SEK",
+    "SGD",
+    "THB",
+    "USD",
+    "ZAR",
+}
+
+
+def _normalize_search_text(value: Any) -> str:
+    if value is None:
+        return ""
+
+    normalized = unicodedata.normalize("NFKD", str(value))
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    return ascii_text.casefold()
+
+
+def _search_tokens(search: str) -> List[str]:
+    return [
+        token
+        for token in re.split(r"\s+", _normalize_search_text(search).strip())
+        if token
+    ]
+
+
+def _name_from_value(value: Any) -> Optional[str]:
+    if isinstance(value, dict):
+        return value.get("name")
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _id_from_value(value: Any) -> Optional[str]:
+    if isinstance(value, dict):
+        return value.get("id")
+    return None
+
+
+def _raw_transaction_matches_search(
+    txn: Dict[str, Any],
+    category_metadata: Dict[str, Dict[str, Optional[str]]],
+    search: str,
+) -> bool:
+    tokens = _search_tokens(search)
+    if not tokens:
+        return True
+
+    category = txn.get("category") if isinstance(txn.get("category"), dict) else {}
+    account = txn.get("account") if isinstance(txn.get("account"), dict) else {}
+    merchant = txn.get("merchant")
+    category_id = category.get("id") if isinstance(category, dict) else None
+    metadata = category_metadata.get(category_id, {})
+
+    values = [
+        txn.get("description"),
+        txn.get("originalStatement"),
+        txn.get("plaidDescription"),
+        txn.get("plaidName"),
+        txn.get("notes"),
+        _name_from_value(merchant),
+        _id_from_value(merchant),
+        category.get("name") if isinstance(category, dict) else None,
+        category_id,
+        metadata.get("group"),
+        metadata.get("group_id"),
+        account.get("displayName") if isinstance(account, dict) else None,
+        account.get("name") if isinstance(account, dict) else None,
+        account.get("id") if isinstance(account, dict) else None,
+    ]
+    for tag in txn.get("tags", []):
+        if isinstance(tag, dict):
+            values.extend([tag.get("id"), tag.get("name")])
+
+    haystack = " ".join(_normalize_search_text(value) for value in values if value)
+    return all(token in haystack for token in tokens)
+
+
+def _direction_from_amount(amount: Any) -> Optional[str]:
+    if amount is None:
+        return None
+
+    try:
+        parsed = Decimal(str(amount))
+    except (InvalidOperation, ValueError):
+        return None
+
+    if parsed > 0:
+        return "inflow"
+    if parsed < 0:
+        return "outflow"
+    return "zero"
+
+
+def _currency_from_text(text: Any) -> Optional[str]:
+    if not isinstance(text, str):
+        return None
+
+    for match in re.findall(r"\b[A-Z]{3}\b", text.upper()):
+        if match in KNOWN_CURRENCY_CODES:
+            return match
+    return None
+
+
+def _currency_from_transaction(txn: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """Resolve a transaction's currency and the source of that value.
+
+    Returns ``(currency, source)`` where source is one of:
+    - ``"api"``: explicit currency field on the transaction or account
+    - ``"account_name_guess"``: regex-matched a 3-letter code in the account
+      display/name (heuristic; may be wrong for accounts named "USD Bank" etc.)
+    - ``None``: no currency could be derived
+    """
+    account = txn.get("account") if isinstance(txn.get("account"), dict) else {}
+    amount = txn.get("amount") if isinstance(txn.get("amount"), dict) else {}
+
+    direct_currency = first_present(
+        txn.get("currency"),
+        txn.get("currencyCode"),
+        txn.get("isoCurrencyCode"),
+        amount.get("currency") if isinstance(amount, dict) else None,
+        amount.get("currencyCode") if isinstance(amount, dict) else None,
+        account.get("currency") if isinstance(account, dict) else None,
+        account.get("currencyCode") if isinstance(account, dict) else None,
+        account.get("isoCurrencyCode") if isinstance(account, dict) else None,
+    )
+    if direct_currency:
+        return str(direct_currency).upper(), "api"
+
+    guessed = first_present(
+        _currency_from_text(
+            account.get("displayName") if isinstance(account, dict) else None
+        ),
+        _currency_from_text(account.get("name") if isinstance(account, dict) else None),
+    )
+    if guessed:
+        return guessed, "account_name_guess"
+    return None, None
+
+
+def _format_transaction_row(
+    txn: Dict[str, Any],
+    category_metadata: Dict[str, Dict[str, Optional[str]]],
+) -> Dict[str, Any]:
+    category = txn.get("category") if isinstance(txn.get("category"), dict) else {}
+    account = txn.get("account") if isinstance(txn.get("account"), dict) else {}
+    merchant = txn.get("merchant")
+    category_id = category.get("id") if isinstance(category, dict) else None
+    txn_category_metadata = category_metadata.get(category_id, {})
+
+    if category_id:
+        category_group = (
+            category.get("group") if isinstance(category.get("group"), dict) else {}
+        )
+        txn_category_metadata = {
+            "group": first_present(
+                txn_category_metadata.get("group"),
+                category_group.get("name"),
+            ),
+            "group_id": first_present(
+                txn_category_metadata.get("group_id"),
+                category_group.get("id"),
+            ),
+            "group_type": first_present(
+                txn_category_metadata.get("group_type"),
+                category_group.get("type"),
+            ),
+        }
+
+    amount = txn.get("amount")
+    direction = _direction_from_amount(amount)
+    plaid_description = first_present(
+        txn.get("plaidDescription"),
+        txn.get("plaidName"),
+        txn.get("originalStatement"),
+    )
+    original_statement = first_present(txn.get("originalStatement"), plaid_description)
+    transaction_type = first_present(
+        txn.get("transactionType"),
+        txn.get("type"),
+        txn.get("kind"),
+        txn_category_metadata.get("group_type"),
+        direction,
+    )
+    currency, currency_source = _currency_from_transaction(txn)
+
+    return {
+        "id": txn.get("id"),
+        "date": txn.get("date"),
+        "amount": amount,
+        "currency": currency,
+        "currency_source": currency_source,
+        "direction": direction,
+        "direction_source": "amount_sign" if direction else None,
+        "transaction_type": transaction_type,
+        "description": txn.get("description"),
+        "original_statement": original_statement,
+        "plaid_description": plaid_description,
+        "notes": txn.get("notes"),
+        "category": category.get("name") if isinstance(category, dict) else None,
+        "category_id": category_id,
+        "category_group": txn_category_metadata.get("group"),
+        "category_group_id": txn_category_metadata.get("group_id"),
+        "account": account.get("displayName") if isinstance(account, dict) else None,
+        "account_id": account.get("id") if isinstance(account, dict) else None,
+        "merchant": _name_from_value(merchant),
+        "merchant_id": _id_from_value(merchant),
+        "is_pending": txn.get("isPending", txn.get("pending", False)),
+        "needs_review": txn.get("needsReview", False),
+        "review_status": txn.get("reviewStatus"),
+        "is_recurring": bool(
+            txn.get("isRecurring") or txn.get("recurringTransactionStream")
+        ),
+        "is_split_transaction": bool(txn.get("isSplitTransaction")),
+        "hide_from_reports": txn.get("hideFromReports", False),
+        "tags": [
+            {"id": tag.get("id"), "name": tag.get("name")}
+            for tag in (txn.get("tags") or [])
+        ],
+    }
 
 
 @mcp.tool()
@@ -22,11 +267,14 @@ async def get_transactions(
     account_id: Optional[str] = None,
     search: Optional[str] = None,
     category_ids: Optional[List[str]] = None,
+    category_group_ids: Optional[List[str]] = None,
     account_ids: Optional[List[str]] = None,
     tag_ids: Optional[List[str]] = None,
     has_notes: Optional[bool] = None,
     is_split: Optional[bool] = None,
     is_recurring: Optional[bool] = None,
+    wide_search: bool = False,
+    search_scan_limit: int = 200,
 ) -> str:
     """
     Get transactions from Monarch Money.
@@ -39,14 +287,53 @@ async def get_transactions(
         account_id: Specific account ID to filter by (deprecated, use account_ids)
         search: Search query to filter transactions
         category_ids: List of category IDs to filter by
+        category_group_ids: List of category group IDs to filter by
         account_ids: List of account IDs to filter by
         tag_ids: List of tag IDs to filter by
         has_notes: Filter for transactions with/without notes
         is_split: Filter for split transactions
         is_recurring: Filter for recurring transactions
+        wide_search: Opt-in fallback that pulls a page of transactions and
+                     filters them locally across description, original
+                     statement, plaid name, notes, merchant, category,
+                     account, and tags when Monarch's server-side search
+                     returns empty or errors. Off by default because it can
+                     be expensive; turn on when a search you expect to match
+                     comes back empty.
+        search_scan_limit: Maximum transactions the wide_search fallback
+                           will scan locally (default 200)
     """
     try:
         client = await get_monarch_client()
+        category_metadata: Dict[str, Dict[str, Optional[str]]] = {}
+
+        async def _load_category_metadata(required: bool = False) -> None:
+            nonlocal category_metadata
+            if category_metadata:
+                return
+
+            try:
+                data = await client.get_transaction_categories()
+            except Exception:
+                if required:
+                    raise
+                logger.info("Skipping transaction category enrichment", exc_info=True)
+                return
+
+            for cat in data.get("categories", []):
+                group = cat.get("group") if isinstance(cat.get("group"), dict) else {}
+                category_metadata[cat.get("id")] = {
+                    "group": group.get("name") if isinstance(group, dict) else None,
+                    "group_id": group.get("id") if isinstance(group, dict) else None,
+                    "group_type": (
+                        group.get("type") if isinstance(group, dict) else None
+                    ),
+                }
+
+        # category_metadata is loaded lazily: only when category_group_ids
+        # is in filters or when wide_search needs it for haystack matching.
+        # Ordinary calls rely on whatever Monarch returns inline on each
+        # transaction's `category.group` field.
 
         filters: Dict[str, Any] = {}
         if start_date:
@@ -62,8 +349,48 @@ async def get_transactions(
 
         if search:
             filters["search"] = search
-        if category_ids:
-            filters["category_ids"] = category_ids
+
+        merged_category_ids = list(category_ids or [])
+        if category_group_ids:
+            await _load_category_metadata(required=True)
+            group_category_ids = [
+                category_id
+                for category_id, metadata in category_metadata.items()
+                if metadata.get("group_id") in category_group_ids
+            ]
+            for category_id in group_category_ids:
+                if category_id not in merged_category_ids:
+                    merged_category_ids.append(category_id)
+
+            if not merged_category_ids:
+                empty_args = {
+                    "limit": limit,
+                    "offset": offset,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "account_id": account_id,
+                    "search": search,
+                    "category_ids": category_ids,
+                    "category_group_ids": category_group_ids,
+                    "account_ids": account_ids,
+                    "tag_ids": tag_ids,
+                    "has_notes": has_notes,
+                    "is_split": is_split,
+                    "is_recurring": is_recurring,
+                    "wide_search": wide_search,
+                    "search_scan_limit": search_scan_limit,
+                }
+                return json_success(
+                    tool_response_envelope(
+                        "get_transactions",
+                        empty_args,
+                        [],
+                        search_info={"strategy": "server", "fallback_reason": None},
+                    )
+                )
+
+        if merged_category_ids:
+            filters["category_ids"] = merged_category_ids
         if tag_ids:
             filters["tag_ids"] = tag_ids
         if has_notes is not None:
@@ -73,40 +400,126 @@ async def get_transactions(
         if is_recurring is not None:
             filters["is_recurring"] = is_recurring
 
-        transactions = await client.get_transactions(limit=limit, offset=offset, **filters)
+        async def _wide_search(
+            reason: str, original_error: Optional[Exception] = None
+        ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+            if not search or not wide_search:
+                if original_error:
+                    raise original_error
+                return {"allTransactions": {"results": []}}, {
+                    "strategy": "server",
+                    "fallback_reason": None,
+                }
 
-        transaction_list = []
-        for txn in transactions.get("allTransactions", {}).get("results", []):
-            category = txn.get("category") or {}
-            account = txn.get("account") or {}
-            merchant = txn.get("merchant") or {}
-            transaction_info = {
-                "id": txn.get("id"),
-                "date": txn.get("date"),
-                "amount": txn.get("amount"),
-                "description": txn.get("description"),
-                "notes": txn.get("notes"),
-                "category": category.get("name"),
-                "category_id": category.get("id"),
-                "account": account.get("displayName"),
-                "account_id": account.get("id"),
-                "merchant": merchant.get("name"),
-                "is_pending": txn.get("isPending", False),
-                "needs_review": txn.get("needsReview", False),
-                "review_status": txn.get("reviewStatus"),
-                "is_recurring": bool(txn.get("isRecurring") or txn.get("recurringTransactionStream")),
-                "is_split_transaction": bool(txn.get("isSplitTransaction")),
-                "hide_from_reports": txn.get("hideFromReports", False),
-                "tags": [
-                    {"id": tag.get("id"), "name": tag.get("name")}
-                    for tag in (txn.get("tags") or [])
-                ],
+            scan_limit = max(limit, search_scan_limit)
+            fallback_filters = {
+                key: value for key, value in filters.items() if key != "search"
             }
-            transaction_list.append(transaction_info)
+            fallback_data = await client.get_transactions(
+                limit=scan_limit,
+                offset=0,
+                **fallback_filters,
+            )
+            all_fallback_transactions = fallback_data.get("allTransactions", {})
+            fallback_results = all_fallback_transactions.get("results", [])
+            # Load category metadata only now that we know wide_search will run;
+            # the haystack uses category group name/id in matching.
+            await _load_category_metadata()
+            matches = [
+                txn
+                for txn in fallback_results
+                if _raw_transaction_matches_search(txn, category_metadata, search)
+            ]
+            total_matches = len(matches)
+            page = matches[offset : offset + limit]
+            return {
+                **fallback_data,
+                "allTransactions": {
+                    **all_fallback_transactions,
+                    "results": page,
+                    "totalCount": total_matches,
+                },
+            }, {
+                "strategy": "wide",
+                "fallback_reason": reason,
+                "scan_limit": scan_limit,
+                "scanned_count": len(fallback_results),
+                "server_error": (
+                    format_exception(original_error) if original_error else None
+                ),
+            }
 
-        return json_success(transaction_list)
+        try:
+            transactions = await client.get_transactions(
+                limit=limit,
+                offset=offset,
+                **filters,
+            )
+            if (
+                search
+                and wide_search
+                and not transactions.get("allTransactions", {}).get("results", [])
+            ):
+                transactions, search_info = await _wide_search("empty_server_results")
+            else:
+                search_info = {"strategy": "server", "fallback_reason": None}
+        except Exception as original_error:
+            # Server search failed. If the caller opted into wide_search and
+            # there is a search query, try the local-scan fallback. Otherwise
+            # propagate the original error untouched.
+            if not search or not wide_search:
+                raise
+            transactions, search_info = await _wide_search(
+                "server_error", original_error
+            )
+
+        all_transactions = transactions.get("allTransactions", {})
+        transaction_list = [
+            _format_transaction_row(txn, category_metadata)
+            for txn in all_transactions.get("results", [])
+        ]
+        args_summary = {
+            "limit": limit,
+            "offset": offset,
+            "start_date": start_date,
+            "end_date": end_date,
+            "account_id": account_id,
+            "search": search,
+            "category_ids": category_ids,
+            "category_group_ids": category_group_ids,
+            "account_ids": account_ids,
+            "tag_ids": tag_ids,
+            "has_notes": has_notes,
+            "is_split": is_split,
+            "is_recurring": is_recurring,
+            "wide_search": wide_search,
+            "search_scan_limit": search_scan_limit,
+        }
+        total_count = first_present(
+            all_transactions.get("totalCount"),
+            all_transactions.get("total_count"),
+            all_transactions.get("count"),
+        )
+
+        return json_success(
+            tool_response_envelope(
+                "get_transactions",
+                args_summary,
+                transaction_list,
+                total_count=total_count,
+                search_info=search_info,
+            )
+        )
     except Exception as e:
-        return json_error("get_transactions", e)
+        return json.dumps(
+            {
+                "error": True,
+                "tool": "get_transactions",
+                "message": format_exception(e),
+            },
+            indent=2,
+            default=str,
+        )
 
 
 @mcp.tool()
@@ -445,10 +858,12 @@ async def bulk_categorize_transactions(
         for txn_id, outcome in zip(transaction_ids, outcomes):
             if isinstance(outcome, Exception):
                 results["failed"] += 1
-                results["errors"].append({
-                    "transaction_id": txn_id,
-                    "error": str(outcome),
-                })
+                results["errors"].append(
+                    {
+                        "transaction_id": txn_id,
+                        "error": str(outcome),
+                    }
+                )
             else:
                 results["successful"] += 1
 
@@ -513,16 +928,33 @@ async def get_recurring_transactions(
                 "amount": item.get("amount"),
                 "is_past": item.get("isPast", False),
                 "transaction_id": item.get("transactionId"),
-                "stream": {
-                    "id": item.get("stream", {}).get("id"),
-                    "frequency": item.get("stream", {}).get("frequency"),
-                    "amount": item.get("stream", {}).get("amount"),
-                    "is_approximate": item.get("stream", {}).get("isApproximate", False),
-                    "merchant": item.get("stream", {}).get("merchant", {}).get("name")
-                    if item.get("stream", {}).get("merchant") else None,
-                } if item.get("stream") else None,
-                "category": item.get("category", {}).get("name") if item.get("category") else None,
-                "account": item.get("account", {}).get("displayName") if item.get("account") else None,
+                "stream": (
+                    {
+                        "id": item.get("stream", {}).get("id"),
+                        "frequency": item.get("stream", {}).get("frequency"),
+                        "amount": item.get("stream", {}).get("amount"),
+                        "is_approximate": item.get("stream", {}).get(
+                            "isApproximate", False
+                        ),
+                        "merchant": (
+                            item.get("stream", {}).get("merchant", {}).get("name")
+                            if item.get("stream", {}).get("merchant")
+                            else None
+                        ),
+                    }
+                    if item.get("stream")
+                    else None
+                ),
+                "category": (
+                    item.get("category", {}).get("name")
+                    if item.get("category")
+                    else None
+                ),
+                "account": (
+                    item.get("account", {}).get("displayName")
+                    if item.get("account")
+                    else None
+                ),
             }
             recurring_list.append(recurring_info)
 

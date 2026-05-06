@@ -2,9 +2,68 @@
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def format_exception(exc: Exception) -> str:
+    """Best-effort string representation for tool error responses.
+
+    Some exceptions (e.g. certain async/transport errors) stringify to ``""``;
+    fall back to ``repr`` and finally the class name so the message is never
+    blank.
+    """
+    message = str(exc).strip()
+    if message:
+        return message
+    rep = repr(exc).strip()
+    if rep:
+        return rep
+    return type(exc).__name__
+
+
+def first_present(*values: Any) -> Any:
+    """Return the first value that is not None and not an empty string."""
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def tool_response_envelope(
+    tool: str,
+    args: Dict[str, Any],
+    rows: List[Dict[str, Any]],
+    *,
+    total_count: Optional[int] = None,
+    search_info: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Wrap a list of rows in a self-describing envelope.
+
+    Lets agents see how much was returned, whether more is available, and which
+    search strategy ran without re-asking. ``truncated`` is True when the server
+    reports more rows than were returned, or when the page filled exactly to the
+    limit and total_count is unknown.
+    """
+    count = len(rows)
+    limit = args.get("limit")
+    offset = args.get("offset") or 0
+    truncated = (
+        offset + count < total_count
+        if isinstance(total_count, int)
+        else isinstance(limit, int) and count == limit
+    )
+
+    return {
+        "tool": tool,
+        "args": args,
+        "count": count,
+        "total_count": total_count,
+        "truncated": truncated,
+        "search": search_info,
+        "data": rows,
+    }
 
 
 def format_transaction(txn: Dict[str, Any], extended: bool = False) -> Dict[str, Any]:
@@ -52,7 +111,7 @@ def json_error(tool_name: str, exc: Exception) -> str:
     """Return a consistent JSON error string and log the failure."""
     logger.error(f"Failed in {tool_name}: {exc}")
     return json.dumps(
-        {"error": True, "tool": tool_name, "message": str(exc)},
+        {"error": True, "tool": tool_name, "message": format_exception(exc)},
         indent=2,
         default=str,
     )
