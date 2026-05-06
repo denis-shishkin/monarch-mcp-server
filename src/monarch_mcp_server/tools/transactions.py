@@ -310,7 +310,10 @@ async def get_transactions(
                     ),
                 }
 
-        await _load_category_metadata()
+        # category_metadata is loaded lazily: only when category_group_ids
+        # is in filters or when wide_search needs it for haystack matching.
+        # Ordinary calls rely on whatever Monarch returns inline on each
+        # transaction's `category.group` field.
 
         filters: Dict[str, Any] = {}
         if start_date:
@@ -399,6 +402,9 @@ async def get_transactions(
             )
             all_fallback_transactions = fallback_data.get("allTransactions", {})
             fallback_results = all_fallback_transactions.get("results", [])
+            # Load category metadata only now that we know wide_search will run;
+            # the haystack uses category group name/id in matching.
+            await _load_category_metadata()
             matches = [
                 txn
                 for txn in fallback_results

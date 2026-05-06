@@ -54,7 +54,11 @@ def mock_monarch_client():
                     "currencyCode": "CAD",
                     "description": "Grocery Store",
                     "plaidName": "WHOLE FOODS MARKET 10234",
-                    "category": {"id": "cat-1", "name": "Groceries"},
+                    "category": {
+                        "id": "cat-1",
+                        "name": "Groceries",
+                        "group": {"id": "grp-1", "name": "Food", "type": "expense"},
+                    },
                     "account": {"id": "acc-1", "displayName": "Checking Account"},
                     "merchant": {"name": "Whole Foods"},
                     "isPending": False,
