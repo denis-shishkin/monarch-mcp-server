@@ -647,6 +647,7 @@ class TestGetTransactions:
         assert result[0]["id"] == "txn-1"
         assert result[0]["amount"] == -42.50
         assert result[0]["currency"] == "CAD"
+        assert result[0]["currency_source"] == "api"
         assert result[0]["direction"] == "outflow"
         assert result[0]["direction_source"] == "amount_sign"
         assert result[0]["transaction_type"] == "expense"
@@ -670,6 +671,7 @@ class TestGetTransactions:
         result = await self._transaction_rows()
         assert result[1]["merchant"] is None
         assert result[1]["currency"] == "USD"
+        assert result[1]["currency_source"] == "account_name_guess"
         assert result[1]["direction"] == "inflow"
         assert result[1]["notes"] is None
         assert result[1]["needs_review"] is False

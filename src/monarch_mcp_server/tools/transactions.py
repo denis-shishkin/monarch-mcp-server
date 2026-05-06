@@ -140,7 +140,15 @@ def _currency_from_text(text: Any) -> Optional[str]:
     return None
 
 
-def _currency_from_transaction(txn: Dict[str, Any]) -> Optional[str]:
+def _currency_from_transaction(txn: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """Resolve a transaction's currency and the source of that value.
+
+    Returns ``(currency, source)`` where source is one of:
+    - ``"api"``: explicit currency field on the transaction or account
+    - ``"account_name_guess"``: regex-matched a 3-letter code in the account
+      display/name (heuristic; may be wrong for accounts named "USD Bank" etc.)
+    - ``None``: no currency could be derived
+    """
     account = txn.get("account") if isinstance(txn.get("account"), dict) else {}
     amount = txn.get("amount") if isinstance(txn.get("amount"), dict) else {}
 
@@ -155,14 +163,17 @@ def _currency_from_transaction(txn: Dict[str, Any]) -> Optional[str]:
         account.get("isoCurrencyCode") if isinstance(account, dict) else None,
     )
     if direct_currency:
-        return str(direct_currency).upper()
+        return str(direct_currency).upper(), "api"
 
-    return first_present(
+    guessed = first_present(
         _currency_from_text(
             account.get("displayName") if isinstance(account, dict) else None
         ),
         _currency_from_text(account.get("name") if isinstance(account, dict) else None),
     )
+    if guessed:
+        return guessed, "account_name_guess"
+    return None, None
 
 
 def _format_transaction_row(
@@ -209,12 +220,14 @@ def _format_transaction_row(
         txn_category_metadata.get("group_type"),
         direction,
     )
+    currency, currency_source = _currency_from_transaction(txn)
 
     return {
         "id": txn.get("id"),
         "date": txn.get("date"),
         "amount": amount,
-        "currency": _currency_from_transaction(txn),
+        "currency": currency,
+        "currency_source": currency_source,
         "direction": direction,
         "direction_source": "amount_sign" if direction else None,
         "transaction_type": transaction_type,
