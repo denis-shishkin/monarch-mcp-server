@@ -464,48 +464,14 @@ async def get_transactions(
             else:
                 search_info = {"strategy": "server", "fallback_reason": None}
         except Exception as original_error:
-            if not search:
+            # Server search failed. If the caller opted into wide_search and
+            # there is a search query, try the local-scan fallback. Otherwise
+            # propagate the original error untouched.
+            if not search or not wide_search:
                 raise
-
-            retry_search = search.casefold()
-            if retry_search == search:
-                transactions, search_info = await _wide_search(
-                    "server_error", original_error
-                )
-            else:
-                retry_filters = {**filters, "search": retry_search}
-                try:
-                    transactions = await client.get_transactions(
-                        limit=limit,
-                        offset=offset,
-                        **retry_filters,
-                    )
-                    if wide_search and not transactions.get("allTransactions", {}).get(
-                        "results", []
-                    ):
-                        transactions, search_info = await _wide_search(
-                            "empty_lowercase_retry_results", original_error
-                        )
-                    else:
-                        search_info = {
-                            "strategy": "lowercase_retry",
-                            "fallback_reason": "server_error",
-                            "server_error": format_exception(original_error),
-                        }
-                except Exception as retry_error:
-                    try:
-                        transactions, search_info = await _wide_search(
-                            "server_and_lowercase_retry_error", retry_error
-                        )
-                    except Exception as fallback_error:
-                        raise RuntimeError(
-                            "Search failed for "
-                            f"{search!r}; lowercase retry {retry_search!r} and "
-                            "wide search also failed. "
-                            f"Original error: {format_exception(original_error)}; "
-                            f"retry error: {format_exception(retry_error)}; "
-                            f"wide search error: {format_exception(fallback_error)}"
-                        ) from fallback_error
+            transactions, search_info = await _wide_search(
+                "server_error", original_error
+            )
 
         all_transactions = transactions.get("allTransactions", {})
         transaction_list = [

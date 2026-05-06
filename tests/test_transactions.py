@@ -776,22 +776,13 @@ class TestGetTransactions:
         assert result["data"] == []
         mock_monarch_client.get_transactions.assert_not_called()
 
-    async def test_uppercase_search_retries_lowercase(self, mock_monarch_client):
-        response = mock_monarch_client.get_transactions.return_value
-        mock_monarch_client.get_transactions.side_effect = [
-            Exception(),
-            response,
-        ]
+    async def test_server_error_propagates_when_wide_search_off(
+        self, mock_monarch_client
+    ):
+        mock_monarch_client.get_transactions.side_effect = Exception("backend boom")
         result = await self._transaction_response(search="RRSP")
-        assert len(result["data"]) == 2
-        assert result["search"]["strategy"] == "lowercase_retry"
-        assert result["search"]["fallback_reason"] == "server_error"
-        mock_monarch_client.get_transactions.assert_has_calls(
-            [
-                call(limit=100, offset=0, search="RRSP"),
-                call(limit=100, offset=0, search="rrsp"),
-            ]
-        )
+        assert result["error"] is True
+        assert "backend boom" in result["message"]
 
     async def test_empty_search_results_fall_back_to_wide_search(
         self, mock_monarch_client
@@ -829,8 +820,7 @@ class TestGetTransactions:
     async def test_search_errors_fall_back_to_wide_search(self, mock_monarch_client):
         response = mock_monarch_client.get_transactions.return_value
         mock_monarch_client.get_transactions.side_effect = [
-            Exception(),
-            Exception(),
+            Exception("server search failed"),
             response,
         ]
         result = await self._transaction_response(
@@ -839,11 +829,11 @@ class TestGetTransactions:
         assert result["count"] == 1
         assert result["data"][0]["id"] == "txn-1"
         assert result["search"]["strategy"] == "wide"
-        assert result["search"]["fallback_reason"] == "server_and_lowercase_retry_error"
+        assert result["search"]["fallback_reason"] == "server_error"
+        assert result["search"]["server_error"] == "server search failed"
         mock_monarch_client.get_transactions.assert_has_calls(
             [
                 call(limit=10, offset=0, search="WHOLE"),
-                call(limit=10, offset=0, search="whole"),
                 call(limit=200, offset=0),
             ]
         )
